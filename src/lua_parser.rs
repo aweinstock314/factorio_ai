@@ -11,6 +11,7 @@ use nom::{
 use serde::{Serialize, Deserialize};
 
 use std::{collections::HashMap, str::FromStr};
+use std::convert::{TryInto, TryFrom};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LuaObject {
@@ -20,6 +21,101 @@ pub enum LuaObject {
     Str(String),
     Int(u64),
     Float(f64),
+}
+
+impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for HashMap<String, T> {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<Self, Self::Error> {
+        match value {
+            LuaObject::Map(m) => m.into_iter()
+                .map(|(i, l)| T::try_from(l)
+                    .map_err(|_| format!("Could not convert child '{}'", &i))
+                    .map(|l| (i, l)))
+                .collect(),
+            _ => Err("Not an Array".into())
+        }
+    }
+}
+
+impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for Vec<T> {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<Vec<T>, Self::Error> {
+        match value {
+            LuaObject::Array(a) => a.into_iter()
+                .enumerate()
+                .map(|(idx, i)| i.try_into().map_err(|_| format!("Could not convert child {}", idx))).collect(),
+            _ => Err("Not an Array".into())
+        }
+    }
+}
+
+impl<T1: TryFrom<LuaObject>, T2: TryFrom<LuaObject>> TryFrom<LuaObject> for (T1, T2) {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<(T1, T2), Self::Error> {
+        match value {
+            LuaObject::Array(mut ar) => {
+                if ar.len() == 2 {
+                    let a = ar.remove(0);
+                    let b = ar.remove(0);
+                    Ok((
+                        T1::try_from(a).map_err(|_| String::from("Couldn't convert first arg"))?,
+                        T2::try_from(b).map_err(|_| String::from("Couldn't convert second arg"))?
+                    ))
+                } else {
+                    return Err("Invalid sized array".into());
+                }
+            }
+            _ => Err("Not an Array".into())
+        }
+    }
+}
+
+impl TryFrom<LuaObject> for bool {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<bool, Self::Error> {
+        match value {
+            LuaObject::Bool(b) => Ok(b),
+            _ => Err("Not a Bool".into())
+        }
+    }
+}
+
+impl TryFrom<LuaObject> for String {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<String, Self::Error> {
+        match value {
+            LuaObject::Str(s) => Ok(s),
+            _ => Err("Not a Str".into())
+        }
+    }
+}
+
+impl TryFrom<LuaObject> for u64 {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<u64, Self::Error> {
+        match value {
+            LuaObject::Int(i) => Ok(i),
+            _ => Err("Not a Int".into())
+        }
+    }
+}
+
+impl TryFrom<LuaObject> for f64 {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<f64, Self::Error> {
+        match value {
+            LuaObject::Float(f) => Ok(f),
+            LuaObject::Int(i) => Ok(i as f64),
+            _ => Err("Not a Float".into())
+        }
+    }
 }
 
 pub fn whitespace<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
