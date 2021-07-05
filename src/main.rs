@@ -1,13 +1,14 @@
 pub mod lua_parser;
 
-use nom::{error::convert_error, Finish};
+use nom::{error::convert_error, Finish, Parser};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fs::File, io::Read};
 
 use lua_parser::{parse_data_extend, LuaObject};
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, HashSet};
 use std::convert::{TryFrom, TryInto};
+use std::iter::FromIterator;
 
 type ProductsPerSecond = f64;
 type ProductId = String;
@@ -22,10 +23,19 @@ struct Ingredient {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Recipe {
     name: ProductId,
+    category: String,
     enabled: bool,
     ingredients: Vec<Ingredient>,
     speed: ProductsPerSecond,
     results: Vec<Ingredient>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ModuleEffect {
+    speed: f64,
+    consumption: f64,
+    productivity: f64,
+    pollution: f64,
 }
 
 impl TryFrom<LuaObject> for Ingredient {
@@ -79,7 +89,9 @@ impl TryFrom<LuaObject> for Recipe {
             .ok_or("No entry 'name'".into())
             .and_then(|(_, l)| l.try_into())?;
 
-        println!("{}", name);
+        let category: String = conts
+            .remove_entry("category")
+            .map_or_else(|| Ok(String::from("crafting")), |(_, l)| l.try_into())?;
 
         let recipe: Result<HashMap<String, LuaObject>, String> = conts
             .remove_entry("normal")
@@ -157,6 +169,7 @@ impl TryFrom<LuaObject> for Recipe {
 
         Ok(Recipe {
             name,
+            category,
             enabled,
             ingredients,
             speed: 1f64 / energy_required,
@@ -187,12 +200,88 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let mut mining_speed = HashMap::<ProductId, ProductsPerSecond>::new();
-    mining_speed.insert("electric-mining-drill".into(), 0.5f64);
-    mining_speed.insert("burner-mining-drill".into(), 0.25f64);
-    mining_speed.insert("pumpjack".into(), 1f64);
+    // TODO: Parse (avi?)
 
-    let goal: (ProductId, f64) = ("speed-module".into(), 1f64);
+    // mining-drill.lua
+    let mining_speed = HashMap::<ProductId, ProductsPerSecond>::from_iter([
+        ("electric-mining-drill".into(), 0.5f64),
+        ("burner-mining-drill".into(), 0.25f64),
+        ("pumpjack".into(), 1f64),
+    ]);
+
+    // item.lua
+    let productivity_allowed = HashSet::<String>::from_iter([
+        String::from("sulfuric-acid"),
+        String::from("basic-oil-processing"),
+        String::from("advanced-oil-processing"),
+        String::from("coal-liquefaction"),
+        String::from("heavy-oil-cracking"),
+        String::from("light-oil-cracking"),
+        String::from("solid-fuel-from-light-oil"),
+        String::from("solid-fuel-from-heavy-oil"),
+        String::from("solid-fuel-from-petroleum-gas"),
+        String::from("lubricant"),
+        String::from("iron-plate"),
+        String::from("copper-plate"),
+        String::from("steel-plate"),
+        String::from("stone-brick"),
+        String::from("sulfur"),
+        String::from("plastic-bar"),
+        String::from("empty-barrel"),
+        String::from("uranium-processing"),
+        String::from("copper-cable"),
+        String::from("iron-stick"),
+        String::from("iron-gear-wheel"),
+        String::from("electronic-circuit"),
+        String::from("advanced-circuit"),
+        String::from("processing-unit"),
+        String::from("engine-unit"),
+        String::from("electric-engine-unit"),
+        String::from("uranium-fuel-cell"),
+        String::from("explosives"),
+        String::from("battery"),
+        String::from("flying-robot-frame"),
+        String::from("low-density-structure"),
+        String::from("rocket-fuel"),
+        String::from("nuclear-fuel"),
+        String::from("nuclear-fuel-reprocessing"),
+        String::from("rocket-control-unit"),
+        String::from("rocket-part"),
+        String::from("automation-science-pack"),
+        String::from("logistic-science-pack"),
+        String::from("chemical-science-pack"),
+        String::from("military-science-pack"),
+        String::from("production-science-pack"),
+        String::from("utility-science-pack"),
+        String::from("kovarex-enrichment-process")
+    ]);
+
+    // item.lua
+    let module_bonuses = HashMap::<String, ModuleEffect>::from_iter([
+        (String::from("speed-module"), ModuleEffect { speed: 0.2, consumption: 0.5, productivity: 0.0, pollution: 0.0}),
+        (String::from("speed-module-2"), ModuleEffect { speed: 0.3, consumption: 0.6, productivity: 0.0, pollution: 0.0}),
+        (String::from("speed-module-3"), ModuleEffect { speed: 0.5, consumption: 0.7, productivity: 0.0, pollution: 0.0}),
+        (String::from("efficiency-module"), ModuleEffect { speed: 0.0, consumption: -0.3, productivity: 0.0, pollution: 0.0}),
+        (String::from("efficiency-module-2"), ModuleEffect { speed: 0.0, consumption: -0.4, productivity: 0.0, pollution: 0.0}),
+        (String::from("efficiency-module-3"), ModuleEffect { speed: 0.0, consumption: -0.5, productivity: 0.0, pollution: 0.0}),
+        (String::from("productivity-module"), ModuleEffect { speed: -0.05, consumption: 0.4, productivity: 0.04, pollution: 0.05}),
+        (String::from("productivity-module-2"), ModuleEffect { speed: -0.1, consumption: 0.6, productivity: 0.06, pollution: 0.07}),
+        (String::from("productivity-module-3"), ModuleEffect { speed: -0.15, consumption: 0.8, productivity: 0.1, pollution: 0.1}),
+    ]);
+
+    // entities.lua
+    let modules_allowed = HashMap::<String, u64>::from_iter([
+        (String::from("advanced-centrifuging"), 0), // nothing does this?
+        (String::from("centrifuging"), 2),
+        (String::from("chemistry"), 3),
+        (String::from("crafting"), 4),
+        (String::from("crafting-with-fluid"), 4),
+        (String::from("oil-processing"), 3),
+        (String::from("rocket-building"), 4),
+        (String::from("smelting"), 2),
+    ]);
+
+    let goal: (ProductId, f64) = ("speed-module-3".into(), 1f64);
 
     let mut requirements = HashMap::new();
     let mut todo_requirements = VecDeque::new();
@@ -224,11 +313,28 @@ fn main() -> Result<(), Box<dyn Error>> {
             for ingredient in &fastest.ingredients {
                 println!(
                     "Using {} to make {} x {} from {:?}",
-                    ingredient.name, product, output_amount, fastest.ingredients
+                    ingredient.name, product, output_amount, fastest
                 );
+                let mut modded_rate = speed * (ingredient.amount as f64) / (output_amount as f64);
+                if productivity_allowed.contains(&fastest.name) {
+                    let modules = vec![
+                        String::from("productivity-module-3"); // why settle for anything less
+                        *modules_allowed.get(&fastest.category).expect("Unknown category") as usize
+                    ];
+
+                    let module_effect: f64 = modules
+                        .into_iter()
+                        .map(|m| module_bonuses
+                            .get(&*m)
+                            .expect("Unknown module")
+                            .productivity
+                        ).sum();
+
+                    modded_rate /= 1f64 + module_effect;
+                }
                 todo_requirements.push_back((
                     ingredient.name.clone(),
-                    speed * (ingredient.amount as f64) / (output_amount as f64),
+                    modded_rate,
                 ));
             }
         } else {
