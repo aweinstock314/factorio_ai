@@ -125,7 +125,7 @@ impl TryFrom<LuaObject> for Recipe {
                     .map_or_else(|| Ok(true), |(_, l)| l.try_into())?,
                 recipe
                     .remove_entry("energy_required")
-                    .map_or_else(|| Ok(0f64), |(_, l)| l.try_into())?,
+                    .map_or_else(|| Ok(1f64), |(_, l)| l.try_into())?,
                 recipe
                     .remove_entry("ingredients")
                     .ok_or("No entry 'ingredients'".into())
@@ -159,7 +159,7 @@ impl TryFrom<LuaObject> for Recipe {
                     .map_or_else(|| Ok(true), |(_, l)| l.try_into())?,
                 conts
                     .remove_entry("energy_required")
-                    .map_or_else(|| Ok(0f64), |(_, l)| l.try_into())?,
+                    .map_or_else(|| Ok(1f64), |(_, l)| l.try_into())?,
                 conts
                     .remove_entry("ingredients")
                     .ok_or("No entry 'ingredients'".into())
@@ -271,7 +271,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // entities.lua
     let modules_allowed = HashMap::<String, u64>::from_iter([
-        (String::from("advanced-centrifuging"), 0), // nothing does this?
+        (String::from("advanced-crafting"), 4),
         (String::from("centrifuging"), 2),
         (String::from("chemistry"), 3),
         (String::from("crafting"), 4),
@@ -281,7 +281,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         (String::from("smelting"), 2),
     ]);
 
-    let goal: (ProductId, f64) = ("speed-module-3".into(), 1f64);
+    let goal: (ProductId, f64) = ("spidertron".into(), 1f64);
 
     let mut requirements = HashMap::new();
     let mut todo_requirements = VecDeque::new();
