@@ -4,7 +4,7 @@ use nom::{error::convert_error, Finish, Parser};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, fs::File, io::Read};
 
-use lua_parser::{parse_data_extend, LuaObject};
+use lua_parser::{parse_data_extend, LuaObject, LuaContext};
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque, HashSet};
 use std::convert::{TryFrom, TryInto};
@@ -353,5 +353,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // println!("{}", ron::ser::to_string_pretty(&recipe_map, PrettyConfig::default())?);
 
+    Ok(())
+}
+
+#[test]
+fn parse_item() -> Result<(), Box<dyn Error>> {
+    let mut data = File::open("./factorio_headless/factorio/data/base/prototypes/item.lua")?;
+    let mut string_data = String::new();
+    data.read_to_string(&mut string_data)?;
+    let mut ctx = LuaContext::new();
+    let e = ctx.parse_all::<nom::error::VerboseError<_>>(&string_data).finish();
+    println!("{:?}", ctx);
+    if let Err(e) = e {
+        panic!("{}", convert_error(&*string_data, e));
+    }
     Ok(())
 }

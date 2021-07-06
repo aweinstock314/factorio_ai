@@ -1,6 +1,6 @@
 use nom::{
     branch::alt,
-    bytes::complete::{is_a, is_not, tag},
+    bytes::complete::{is_a, is_not, tag, take_until},
     character::complete::{alpha1, alphanumeric1, multispace0},
     combinator::{map, opt, recognize},
     error::{context, ContextError, ParseError},
@@ -152,6 +152,16 @@ pub fn parse_bool<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     ))(input)
 }
 
+pub fn parse_namespaced<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, Vec<String>, E> {
+    let (input, names) = map(separated_list1(tag("."), parse_identifier), |t| {
+        t.into_iter().map(String::from).collect()
+    })(input)?;
+    let (input, _) = whitespace(input)?;
+    Ok((input, names))
+}
+
 pub fn parse_object<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaObject, E> {
@@ -161,6 +171,7 @@ pub fn parse_object<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
         context("str", parse_str),
         context("map", parse_map),
         context("array", parse_array),
+        map(parse_namespaced, |t| LuaObject::Str(format!("{:?}", t))),
     ))(input)?;
     //println!("obj: {:?}", ret);
     Ok((input, ret))
@@ -211,11 +222,17 @@ pub fn parse_num<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
 pub fn parse_identifier<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, &'a str, E> {
-    recognize(pair(
+    let (input, ident) = recognize(pair(
         alt((alpha1, tag("_"))),
         many0(alt((alphanumeric1, tag("_")))),
-    ))(input)
+    ))(input)?;
+    if ident == "return" {
+        return Err(nom::Err::Error(E::from_error_kind(input, nom::error::ErrorKind::Satisfy)))
+    }
+
+    Ok((input, ident))
 }
+
 pub fn parse_field<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, (String, LuaObject), E> {
@@ -249,6 +266,7 @@ pub fn parse_array<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     let (input, _) = whitespace(input)?;
     let (input, _) = opt(commaspace)(input)?;
     let (input, _) = tag("}")(input)?;
+    let (input, _) = whitespace(input)?;
     Ok((input, LuaObject::Array(objects)))
 }
 
@@ -260,5 +278,187 @@ pub fn parse_data_extend<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     let (input, object) = parse_object(input)?;
     let (input, _) = whitespace(input)?;
     let (input, _) = tag(")")(input)?;
+    let (input, _) = whitespace(input)?;
     Ok((input, object))
+}
+
+pub fn parse_local<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, (String, LuaExpr), E> {
+    map(
+        tuple((
+            tag("local"),
+            whitespace,
+            parse_identifier,
+            whitespace,
+            tag("="),
+            whitespace,
+            parse_expr,
+            whitespace,
+        )),
+        |t| (t.2.to_string(), t.6),
+    )(input)
+}
+
+pub fn parse_funcall<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, LuaExpr, E> {
+    map(
+        tuple((
+            parse_identifier,
+            whitespace,
+            tag("("),
+            whitespace,
+            separated_list0(commaspace, parse_expr),
+            tag(")"),
+            whitespace,
+        )),
+        |t| LuaExpr::Funcall(t.0.to_string(), t.4),
+    )(input)
+}
+
+pub fn parse_return<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, LuaExpr, E> {
+    map(
+        tuple((tag("return"), whitespace, parse_expr, whitespace)),
+        |t| LuaExpr::Return(Box::new(t.2)),
+    )(input)
+}
+
+pub fn parse_expr<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, LuaExpr, E> {
+    alt((
+        map(parse_anon_function, |f| LuaExpr::Fundef(Box::new(f))),
+        parse_return,
+        parse_funcall,
+        map(parse_object, LuaExpr::Literal),
+    ))(input)
+}
+
+pub fn parse_named_function<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, (String, LuaFunction), E> {
+    parse_function(
+        map(tuple((parse_identifier, whitespace)), |t| t.0.to_string()),
+        input,
+    )
+}
+
+pub fn parse_anon_function<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, LuaFunction, E> {
+    map(
+        |input| parse_function(|input| Ok((input, ())), input),
+        |t| t.1,
+    )(input)
+}
+
+pub fn parse_unhandled_body<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, LuaExpr, E> {
+    map(take_until("end"), |s: &str| {
+        LuaExpr::Literal(LuaObject::Str(s.to_string()))
+    })(input)
+}
+
+pub fn parse_function<
+    'a,
+    E: ParseError<&'a str> + ContextError<&'a str>,
+    T,
+    F: FnMut(&'a str) -> IResult<&'a str, T, E>,
+>(
+    f: F,
+    input: &'a str,
+) -> IResult<&'a str, (T, LuaFunction), E> {
+    map(
+        tuple((
+            tag("function"),
+            whitespace,
+            f,
+            tag("("),
+            whitespace,
+            separated_list0(commaspace, parse_identifier),
+            tag(")"),
+            whitespace,
+            alt((parse_expr, parse_unhandled_body)),
+            tag("end"),
+            whitespace,
+        )),
+        |t| {
+            (
+                t.2,
+                LuaFunction {
+                    args: t.5.into_iter().map(String::from).collect(),
+                    body: t.8,
+                },
+            )
+        },
+    )(input)
+}
+
+#[derive(Debug)]
+pub enum LuaExpr {
+    Literal(LuaObject),
+    Funcall(String, Vec<LuaExpr>),
+    Fundef(Box<LuaFunction>),
+    Return(Box<LuaExpr>),
+}
+
+#[derive(Debug)]
+pub struct LuaFunction {
+    pub args: Vec<String>,
+    pub body: LuaExpr,
+}
+
+#[derive(Debug)]
+pub struct LuaContext {
+    pub locals: HashMap<String, LuaExpr>,
+    pub functions: HashMap<String, LuaFunction>,
+    pub data_extends: Vec<LuaObject>,
+}
+
+impl LuaContext {
+    pub fn new() -> Self {
+        Self {
+            locals: HashMap::new(),
+            functions: HashMap::new(),
+            data_extends: Vec::new(),
+        }
+    }
+    pub fn parse_all<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+        &mut self,
+        mut input: &'a str,
+    ) -> IResult<&'a str, (), E> {
+        loop {
+            let (new_input, ()) = self.parse_toplevel(input)?;
+            input = new_input;
+            if input.is_empty() {
+                break Ok((input, ()));
+            }
+        }
+    }
+    pub fn parse_toplevel<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+        &mut self,
+        input: &'a str,
+    ) -> IResult<&'a str, (), E> {
+        let Self {
+            ref mut locals,
+            ref mut functions,
+            ref mut data_extends,
+        } = self;
+        let (input, ()) = alt((
+            map(parse_data_extend, |obj| {
+                data_extends.push(obj);
+            }),
+            map(parse_local, |(name, expr)| {
+                locals.insert(name, expr);
+            }),
+            map(parse_named_function, |(name, func)| {
+                functions.insert(name, func);
+            }),
+        ))(input)?;
+        Ok((input, ()))
+    }
 }
