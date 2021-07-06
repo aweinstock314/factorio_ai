@@ -16,7 +16,7 @@ type ProductId = String;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Ingredient {
     name: ProductId,
-    amount: u64,
+    amount: i64,
     type_: String,
 }
 
@@ -42,7 +42,7 @@ impl TryFrom<LuaObject> for Ingredient {
     type Error = String;
 
     fn try_from(value: LuaObject) -> Result<Self, Self::Error> {
-        let array_form = <(String, u64)>::try_from(value.clone());
+        let array_form = <(String, i64)>::try_from(value.clone());
         let map_form = HashMap::<String, LuaObject>::try_from(value.clone());
 
         let name;
@@ -62,7 +62,7 @@ impl TryFrom<LuaObject> for Ingredient {
                     .and_then(|(_, l)| String::try_from(l))?;
                 amount = map
                     .remove_entry("amount")
-                    .map_or_else(|| Ok(1), |(_, l)| u64::try_from(l))?;
+                    .map_or_else(|| Ok(1), |(_, l)| i64::try_from(l))?;
                 type_ = map
                     .remove_entry("type")
                     .map_or_else(|| Ok("item".into()), |(_, l)| String::try_from(l))?;
@@ -106,8 +106,8 @@ impl TryFrom<LuaObject> for Recipe {
                             .ok_or("No entry 'result' or 'results'".into())
                             .and_then(|(_, r)| {
                                 recipe.remove_entry("result_count").map_or_else(
-                                    || Ok((String::try_from(r.clone())?, 1u64)),
-                                    |(_, c)| Ok((String::try_from(r.clone())?, u64::try_from(c)?)),
+                                    || Ok((String::try_from(r.clone())?, 1i64)),
+                                    |(_, c)| Ok((String::try_from(r.clone())?, i64::try_from(c)?)),
                                 )
                             })
                             .and_then(|(r, c)| {
@@ -140,8 +140,8 @@ impl TryFrom<LuaObject> for Recipe {
                             .ok_or("No entry 'result' or 'results'".into())
                             .and_then(|(_, r)| {
                                 conts.remove_entry("result_count").map_or_else(
-                                    || Ok((String::try_from(r.clone())?, 1u64)),
-                                    |(_, c)| Ok((String::try_from(r.clone())?, u64::try_from(c)?)),
+                                    || Ok((String::try_from(r.clone())?, 1i64)),
+                                    |(_, c)| Ok((String::try_from(r.clone())?, i64::try_from(c)?)),
                                 )
                             })
                             .and_then(|(r, c)| {
@@ -270,7 +270,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     ]);
 
     // entities.lua
-    let modules_allowed = HashMap::<String, u64>::from_iter([
+    let modules_allowed = HashMap::<String, i64>::from_iter([
         (String::from("advanced-crafting"), 4),
         (String::from("centrifuging"), 2),
         (String::from("chemistry"), 3),
@@ -363,9 +363,10 @@ fn parse_item() -> Result<(), Box<dyn Error>> {
     data.read_to_string(&mut string_data)?;
     let mut ctx = LuaContext::new();
     let e = ctx.parse_all::<nom::error::VerboseError<_>>(&string_data).finish();
-    println!("{:?}", ctx);
+    //println!("{:?}", ctx);
     if let Err(e) = e {
         panic!("{}", convert_error(&*string_data, e));
     }
+    println!("{}", ron::ser::to_string_pretty(&ctx, ron::ser::PrettyConfig::default())?);
     Ok(())
 }

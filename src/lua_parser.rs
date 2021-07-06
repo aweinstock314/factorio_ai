@@ -19,8 +19,9 @@ pub enum LuaObject {
     Array(Vec<LuaObject>),
     Bool(bool),
     Str(String),
-    Int(u64),
+    Int(i64),
     Float(f64),
+    Expr(Box<LuaExpr>),
 }
 
 impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for HashMap<String, T> {
@@ -103,10 +104,10 @@ impl TryFrom<LuaObject> for String {
     }
 }
 
-impl TryFrom<LuaObject> for u64 {
+impl TryFrom<LuaObject> for i64 {
     type Error = String;
 
-    fn try_from(value: LuaObject) -> Result<u64, Self::Error> {
+    fn try_from(value: LuaObject) -> Result<i64, Self::Error> {
         match value {
             LuaObject::Int(i) => Ok(i),
             _ => Err("Not a Int".into()),
@@ -127,12 +128,16 @@ impl TryFrom<LuaObject> for f64 {
 }
 
 pub fn whitespace<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
-    input: &'a str,
+    mut input: &'a str,
 ) -> IResult<&'a str, (), E> {
-    let (input, _) = multispace0(input)?;
-    let (input, _) = opt(tuple((tag("--"), is_not("\r\n"))))(input)?;
-    let (input, _) = multispace0(input)?;
-    Ok((input, ()))
+    loop {
+        let (input0, _) = multispace0(input)?;
+        let (input1, _) = opt(tuple((tag("--"), is_not("\r\n"))))(input0)?;
+        if input1.len() == input.len() {
+            break Ok((input, ()));
+        }
+        input = input1;
+    }
 }
 
 pub fn commaspace<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
@@ -165,13 +170,16 @@ pub fn parse_namespaced<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
 pub fn parse_object<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaObject, E> {
+    //println!("parse_object: {:?}", &input[0..20]);
     let (input, ret) = alt((
         context("num", parse_num),
         context("bool", parse_bool),
         context("str", parse_str),
         context("map", parse_map),
         context("array", parse_array),
-        map(parse_namespaced, |t| LuaObject::Str(format!("{:?}", t))),
+        map(parse_namespaced, |t| {
+            LuaObject::Expr(Box::new(LuaExpr::Var(t)))
+        }),
     ))(input)?;
     //println!("obj: {:?}", ret);
     Ok((input, ret))
@@ -197,7 +205,7 @@ pub fn parse_tests() {
 
 /*pub fn parse_int<'a, E: ParseError<&'a str> + ContextError<&'a str>>(input: &'a str) -> IResult<&'a str, LuaObject, E> {
     map(recognize(many1(is_a("0123456789"))), |s: &'a str| {
-        LuaObject::Int(u64::from_str(s).unwrap())
+        LuaObject::Int(i64::from_str(s).unwrap())
     })(input)
 }
 
@@ -210,13 +218,15 @@ pub fn parse_float<'a, E: ParseError<&'a str> + ContextError<&'a str>>(input: &'
 pub fn parse_num<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaObject, E> {
-    map(recognize(many1(is_a("0123456789."))), |s: &'a str| {
-        if let Ok(int) = u64::from_str(s) {
+    let (input, obj) = map(recognize(many1(is_a("-0123456789."))), |s: &'a str| {
+        if let Ok(int) = i64::from_str(s) {
             LuaObject::Int(int)
         } else {
             LuaObject::Float(f64::from_str(s).unwrap())
         }
-    })(input)
+    })(input)?;
+    let (input, _) = whitespace(input)?;
+    Ok((input, obj))
 }
 
 pub fn parse_identifier<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
@@ -227,7 +237,10 @@ pub fn parse_identifier<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
         many0(alt((alphanumeric1, tag("_")))),
     ))(input)?;
     if ident == "return" {
-        return Err(nom::Err::Error(E::from_error_kind(input, nom::error::ErrorKind::Satisfy)))
+        return Err(nom::Err::Error(E::from_error_kind(
+            input,
+            nom::error::ErrorKind::Satisfy,
+        )));
     }
 
     Ok((input, ident))
@@ -236,11 +249,15 @@ pub fn parse_identifier<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
 pub fn parse_field<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, (String, LuaObject), E> {
+    //println!("\tparse_field: {:?}", &input[0..20]);
     let (input, ident) = parse_identifier(input)?;
     let (input, _) = whitespace(input)?;
     let (input, _) = tag("=")(input)?;
     let (input, _) = whitespace(input)?;
-    let (input, rhs) = parse_object(input)?;
+    let (input, rhs) = alt((
+        map(parse_expr, |e| LuaObject::Expr(Box::new(e))),
+        parse_object,
+    ))(input)?;
     Ok((input, (ident.to_string(), rhs)))
 }
 
@@ -326,6 +343,29 @@ pub fn parse_return<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     )(input)
 }
 
+pub fn parse_binopkind<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, BinopKind, E> {
+    alt((
+        map(tag("+"), |_| BinopKind::Plus),
+        map(tag("*"), |_| BinopKind::Times),
+        map(tag(".."), |_| BinopKind::DotDot),
+    ))(input)
+}
+
+pub fn parse_binop<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+    input: &'a str,
+) -> IResult<&'a str, LuaExpr, E> {
+    let (input, lhs) = parse_object(input)?;
+    let (input, op) = parse_binopkind(input)?;
+    let (input, _) = whitespace(input)?;
+    let (input, rhs) = parse_expr(input)?;
+    Ok((
+        input,
+        LuaExpr::Binop(op, Box::new(LuaExpr::Literal(lhs)), Box::new(rhs)),
+    ))
+}
+
 pub fn parse_expr<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaExpr, E> {
@@ -333,6 +373,7 @@ pub fn parse_expr<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
         map(parse_anon_function, |f| LuaExpr::Fundef(Box::new(f))),
         parse_return,
         parse_funcall,
+        parse_binop,
         map(parse_object, LuaExpr::Literal),
     ))(input)
 }
@@ -358,9 +399,16 @@ pub fn parse_anon_function<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
 pub fn parse_unhandled_body<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaExpr, E> {
-    map(take_until("end"), |s: &str| {
-        LuaExpr::Literal(LuaObject::Str(s.to_string()))
-    })(input)
+    if false {
+        map(take_until("end"), |s: &str| {
+            LuaExpr::Literal(LuaObject::Str(s.to_string()))
+        })(input)
+    } else {
+        Err(nom::Err::Error(E::from_error_kind(
+            input,
+            nom::error::ErrorKind::Satisfy,
+        )))
+    }
 }
 
 pub fn parse_function<
@@ -398,21 +446,30 @@ pub fn parse_function<
     )(input)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum BinopKind {
+    Plus,
+    Times,
+    DotDot,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LuaExpr {
+    Var(Vec<String>),
     Literal(LuaObject),
     Funcall(String, Vec<LuaExpr>),
     Fundef(Box<LuaFunction>),
     Return(Box<LuaExpr>),
+    Binop(BinopKind, Box<LuaExpr>, Box<LuaExpr>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LuaFunction {
     pub args: Vec<String>,
     pub body: LuaExpr,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LuaContext {
     pub locals: HashMap<String, LuaExpr>,
     pub functions: HashMap<String, LuaFunction>,
