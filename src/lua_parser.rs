@@ -190,9 +190,11 @@ pub fn parse_subscript<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     // a[0][0][0][0]
     // LValue::Subscript(LValue::Dotted(["a"]), 0)
     if let Some(idx) = input.find("[") {
-        let (_, lvalue) = parse_lvalue(&input[..idx])?;
-        let (input, _) = tag("[")(&input[idx..])?;
+        let (pre_input, lvalue) = parse_lvalue(&input[..idx])?;
+        let (input, _) = tag("[")(&input[idx - pre_input.len()..])?;
         let (input, expr) = parse_expr(input)?;
+        let (input, _) = tag("]")(input)?;
+        let (input, _) = whitespace(input)?;
         Ok((input, (lvalue, expr)))
     } else {
         Err(nom::Err::Error(E::from_error_kind(
@@ -206,7 +208,9 @@ pub fn parse_lvalue<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LValue, E> {
     alt((
-        map(parse_subscript, |(x, y)| LValue::Subscript(Box::new(x), Box::new(y))),
+        map(parse_subscript, |(x, y)| {
+            LValue::Subscript(Box::new(x), Box::new(y))
+        }),
         map(parse_namespaced, |x| LValue::Dotted(x)),
     ))(input)
 }
@@ -214,7 +218,7 @@ pub fn parse_lvalue<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
 pub fn parse_object<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaObject, E> {
-    println!("parse_object: {:?}", &input[0..20]);
+    //println!("parse_object: {:?}", &input[0..20]);
     let (input, ret) = alt((
         context("num", parse_num),
         context("bool", parse_bool),
@@ -283,7 +287,7 @@ pub fn parse_identifier<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
         many0(alt((alphanumeric1, tag("_")))),
     ))(input)?;
     let (input, _) = whitespace(input)?;
-    if ident == "return" {
+    if ["return", "true", "false", "if", "then", "else", "end"].contains(&ident) {
         return Err(nom::Err::Error(E::from_error_kind(
             input,
             nom::error::ErrorKind::Satisfy,
@@ -311,14 +315,14 @@ pub fn parse_field<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
 pub fn parse_assign<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaStmt, E> {
-    println!("parse_assign: {:?}", &input[0..20]);
+    //println!("parse_assign: {:?}", &input[0..20]);
     let (input, lvalue) = parse_lvalue(input)?;
-    println!("\tlvalue: {:?}", lvalue);
+    //println!("\tlvalue: {:?}", lvalue);
     let (input, _) = whitespace(input)?;
     let (input, _) = tag("=")(input)?;
     let (input, _) = whitespace(input)?;
     let (input, rhs) = parse_expr(input)?;
-    println!("\trhs: {:?}", rhs);
+    //println!("\trhs: {:?}", rhs);
     Ok((input, LuaStmt::Assign(lvalue, rhs)))
 }
 
@@ -340,7 +344,10 @@ pub fn parse_array<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
 ) -> IResult<&'a str, LuaObject, E> {
     let (input, _) = tag("{")(input)?;
     let (input, _) = whitespace(input)?;
-    let (input, objects) = separated_list1(commaspace, map(parse_expr, |e| LuaObject::Expr(Box::new(e))))(input)?;
+    let (input, objects) = separated_list1(
+        commaspace,
+        map(parse_expr, |e| LuaObject::Expr(Box::new(e))),
+    )(input)?;
     let (input, _) = whitespace(input)?;
     let (input, _) = opt(commaspace)(input)?;
     let (input, _) = tag("}")(input)?;
@@ -435,14 +442,14 @@ pub fn parse_binopkind<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
 pub fn parse_binop<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaExpr, E> {
-    println!("parse_binop: {:?}", &input[0..20]);
+    //println!("parse_binop: {:?}", &input[0..20]);
     let (input, lhs) = parse_object(input)?;
-    println!("\tlhs: {:?}", lhs);
+    //println!("\tlhs: {:?}", lhs);
     let (input, op) = parse_binopkind(input)?;
-    println!("\top: {:?}", op);
+    //println!("\top: {:?}", op);
     let (input, _) = whitespace(input)?;
     let (input, rhs) = parse_expr(input)?;
-    println!("\trhs: {:?}", rhs);
+    //println!("\trhs: {:?}", rhs);
     Ok((
         input,
         LuaExpr::Binop(op, Box::new(LuaExpr::Literal(lhs)), Box::new(rhs)),
@@ -452,7 +459,7 @@ pub fn parse_binop<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
 pub fn parse_expr<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaExpr, E> {
-    println!("parse_expr: {:?}", &input[0..20]);
+    //println!("parse_expr: {:?}", &input[0..20]);
     alt((
         map(parse_anon_function, |f| LuaExpr::Fundef(Box::new(f))),
         parse_funcall,
@@ -475,40 +482,34 @@ pub fn parse_ifthen<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
             whitespace,
             many1(parse_stmt),
             alt((
+                map(
+                    tuple((tag("else"), whitespace, many1(parse_stmt), tag("end"))),
+                    |t| t.2,
+                ),
                 map(tag("end"), |_| Vec::new()),
-                map(tuple((tag("else"), whitespace, many1(parse_stmt), tag("end"))), |t| t.2),
             )),
             whitespace,
         )),
-        |t| LuaStmt::IfThen(t.2, t.5, t.6)
+        |t| LuaStmt::IfThen(t.2, t.5, t.6),
     )(input)
-}
-
-#[test]
-fn test_foo() {
-    let foo = "if level == 1 then
-    result.prerequisites = {\"defender\"}
-  else
-    result.prerequisites = {\"follower-robot-count-\" .. (level - 1)}
-    if level == 5 then
-      result.prerequisites[#result.prerequisites + 1] = \"destroyer\"
-    end
-  end";
-    assert_eq!(parse_ifthen::<()>(foo), Ok(("", LuaStmt::Return(LuaExpr::Literal(LuaObject::Int(5))))));
-	let bar = "if 1 then return 2 else if \"a\" then a = \"b\" end end                                                                  ";
-    assert_eq!(parse_ifthen::<()>(bar), Ok(("", LuaStmt::Return(LuaExpr::Literal(LuaObject::Int(5))))));
 }
 
 pub fn parse_stmt<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
     input: &'a str,
 ) -> IResult<&'a str, LuaStmt, E> {
-    println!("stmt: {:?}", &input[0..20]);
-    context("Stmt", alt((
-        parse_return,
-        parse_assign,
-        map(parse_local, |(name, expr)| LuaStmt::Assign(LValue::Dotted(vec![name]), expr)),
-        parse_ifthen,
-    )))(input)
+    //println!("stmt: {:?}", &input[0..20]);
+    context(
+        "Stmt",
+        alt((
+            parse_return,
+            parse_assign,
+            map(parse_local, |(name, expr)| {
+                LuaStmt::Assign(LValue::Dotted(vec![name]), expr)
+            }),
+            parse_ifthen,
+            map(parse_expr, |expr| LuaStmt::Expr(expr)),
+        )),
+    )(input)
 }
 
 pub fn parse_named_function<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
@@ -615,6 +616,7 @@ pub enum LuaStmt {
     Return(LuaExpr),
     Assign(LValue, LuaExpr),
     IfThen(LuaExpr, Vec<LuaStmt>, Vec<LuaStmt>),
+    Expr(LuaExpr),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
