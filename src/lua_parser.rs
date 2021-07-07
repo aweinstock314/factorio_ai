@@ -24,6 +24,21 @@ pub enum LuaObject {
     Expr(Box<LuaExpr>),
 }
 
+impl LuaObject {
+    pub fn simplify(self) -> Self {
+        use LuaObject::*;
+        match self {
+            Map(map) => Map(map.into_iter().map(|(k, v)| (k, v.simplify())).collect()),
+            Array(array) => Array(array.into_iter().map(|x| x.simplify()).collect()),
+            Expr(x) => match *x {
+                LuaExpr::Literal(x) => x.simplify(),
+                _ => Expr(x),
+            },
+            _ => self,
+        }
+    }
+}
+
 impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for HashMap<String, T> {
     type Error = String;
 

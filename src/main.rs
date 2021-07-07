@@ -187,7 +187,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let raw_recipes = parse_data_extend(&string_data)
         .finish()
         .map_err(|e| convert_error(&*string_data, e).into())
-        .and_then(|(_, objs)| Vec::<Recipe>::try_from(objs))?;
+        .and_then(|(_, objs)| Vec::<Recipe>::try_from(objs.simplify()))?;
 
     let mut recipe_map = HashMap::<ProductId, Vec<Recipe>>::new();
     for recipe in raw_recipes {
