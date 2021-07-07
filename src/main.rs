@@ -12,10 +12,11 @@ use std::{
     fs::File,
     io::{Read, Write},
     iter::FromIterator,
+    path::PathBuf,
 };
 
-use lua_parser::{parse_data_extend, LuaContext, LuaObject};
 use crate::recipe::{ProductId, ProductsPerSecond, Recipe, RecipeMap};
+use lua_parser::{LuaContext, LuaExpr, LuaObject, LuaStmt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ModuleEffect {
@@ -25,18 +26,30 @@ struct ModuleEffect {
     pollution: f64,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let mut data = File::open("./factorio_headless/factorio/data/base/prototypes/recipe.lua")?;
+const FACTORIO_PREFIX: &'static str = "./factorio_headless/factorio/data/base/";
 
-    let mut string_data = String::new();
-    data.read_to_string(&mut string_data)?;
-
-    let raw_recipes = parse_data_extend(&string_data)
+fn get_context(subpath: &str) -> Result<LuaContext, Box<dyn Error>> {
+    let data = std::fs::read_to_string(&PathBuf::from(FACTORIO_PREFIX).join(subpath))?;
+    let mut ctx = LuaContext::new();
+    ctx.parse_all::<nom::error::VerboseError<_>>(&data)
         .finish()
-        .map_err(|e| convert_error(&*string_data, e).into())
-        .and_then(|(_, objs)| Vec::<Recipe>::try_from(objs.simplify()))?;
+        .map_err(|e| convert_error(&*data, e))?;
+    Ok(ctx)
+}
 
-    let recipe_map = RecipeMap::new(raw_recipes);
+fn main() -> Result<(), Box<dyn Error>> {
+    let recipe_map = {
+        let ctx = get_context("prototypes/recipe.lua")?;
+
+        let mut prerecipes = Vec::new();
+        for objs in ctx.data_extends.into_iter() {
+            prerecipes.extend(Vec::<Recipe>::try_from(objs.simplify())?);
+        }
+
+        let raw_recipes = Vec::<Recipe>::try_from(prerecipes)?;
+
+        RecipeMap::new(raw_recipes)
+    };
 
     // TODO: Parse (avi?)
 
@@ -46,53 +59,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("burner-mining-drill".into(), 0.25f64),
         ("pumpjack".into(), 1f64),
     ]);
+    /*let mining_speed: HashMap::<ProductId, ProductsPerSecond> = {
+        let ctx = get_context("prototypes/entity/mining-drill.lua")?;
+        panic!("{:?}", ctx);
+    };*/
 
     // item.lua
-    let productivity_allowed = HashSet::<String>::from_iter([
-        String::from("sulfuric-acid"),
-        String::from("basic-oil-processing"),
-        String::from("advanced-oil-processing"),
-        String::from("coal-liquefaction"),
-        String::from("heavy-oil-cracking"),
-        String::from("light-oil-cracking"),
-        String::from("solid-fuel-from-light-oil"),
-        String::from("solid-fuel-from-heavy-oil"),
-        String::from("solid-fuel-from-petroleum-gas"),
-        String::from("lubricant"),
-        String::from("iron-plate"),
-        String::from("copper-plate"),
-        String::from("steel-plate"),
-        String::from("stone-brick"),
-        String::from("sulfur"),
-        String::from("plastic-bar"),
-        String::from("empty-barrel"),
-        String::from("uranium-processing"),
-        String::from("copper-cable"),
-        String::from("iron-stick"),
-        String::from("iron-gear-wheel"),
-        String::from("electronic-circuit"),
-        String::from("advanced-circuit"),
-        String::from("processing-unit"),
-        String::from("engine-unit"),
-        String::from("electric-engine-unit"),
-        String::from("uranium-fuel-cell"),
-        String::from("explosives"),
-        String::from("battery"),
-        String::from("flying-robot-frame"),
-        String::from("low-density-structure"),
-        String::from("rocket-fuel"),
-        String::from("nuclear-fuel"),
-        String::from("nuclear-fuel-reprocessing"),
-        String::from("rocket-control-unit"),
-        String::from("rocket-part"),
-        String::from("automation-science-pack"),
-        String::from("logistic-science-pack"),
-        String::from("chemical-science-pack"),
-        String::from("military-science-pack"),
-        String::from("production-science-pack"),
-        String::from("utility-science-pack"),
-        String::from("kovarex-enrichment-process"),
-    ]);
+
+    let item_ctx = get_context("prototypes/item.lua")?;
+
+    let mut productivity_allowed: HashSet<String> = HashSet::new();
+    if let LuaStmt::Return(LuaExpr::Literal(obj)) =
+        &item_ctx.functions["productivity_module_limitation"].body[0]
+    {
+        productivity_allowed = HashSet::<String>::try_from(obj.clone().simplify())?;
+    }
 
     // item.lua
     let module_bonuses = HashMap::<String, ModuleEffect>::from_iter([

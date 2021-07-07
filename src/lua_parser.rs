@@ -11,7 +11,11 @@ use nom::{
 use serde::{Deserialize, Serialize};
 
 use std::convert::{TryFrom, TryInto};
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    str::FromStr,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LuaObject {
@@ -51,6 +55,21 @@ impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for HashMap<String, T> {
                         .map_err(|_| format!("Could not convert child '{}'", &i))
                         .map(|l| (i, l))
                 })
+                .collect(),
+            _ => Err("Not a Map".into()),
+        }
+    }
+}
+
+impl<T: Hash + Eq + TryFrom<LuaObject>> TryFrom<LuaObject> for HashSet<T> {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<Self, Self::Error> {
+        match value {
+            LuaObject::Array(m) => m
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| T::try_from(l).map_err(|_| format!("Could not convert '{}'", &i)))
                 .collect(),
             _ => Err("Not an Array".into()),
         }
@@ -433,6 +452,7 @@ pub fn parse_binopkind<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
         map(tag("+"), |_| BinopKind::Plus),
         map(tag("-"), |_| BinopKind::Minus),
         map(tag("*"), |_| BinopKind::Times),
+        map(tag("/"), |_| BinopKind::Divide),
         map(tag(".."), |_| BinopKind::DotDot),
         map(tag("=="), |_| BinopKind::EqEq),
         map(tag("~="), |_| BinopKind::TildeEq),
@@ -590,6 +610,7 @@ pub enum BinopKind {
     Plus,
     Minus,
     Times,
+    Divide,
     DotDot,
     EqEq,
     TildeEq,
@@ -671,6 +692,7 @@ impl LuaContext {
             map(parse_named_function, |(name, func)| {
                 functions.insert(name, func);
             }),
+            map(parse_stmt, |_| ()),
         ))(input)?;
         Ok((input, ()))
     }

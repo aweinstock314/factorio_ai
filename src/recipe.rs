@@ -1,7 +1,7 @@
-use std::convert::{TryFrom, TryInto};
 use crate::lua_parser::LuaObject;
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
 
 pub type ProductsPerSecond = f64;
 pub type ProductId = String;
