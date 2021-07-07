@@ -466,3 +466,23 @@ fn parse_item() -> Result<(), Box<dyn Error>> {
     );
     Ok(())
 }
+
+#[test]
+fn parse_technology() -> Result<(), Box<dyn Error>> {
+    let mut data = File::open("./factorio_headless/factorio/data/base/prototypes/technology.lua")?;
+    let mut string_data = String::new();
+    data.read_to_string(&mut string_data)?;
+    let mut ctx = LuaContext::new();
+    let e = ctx
+        .parse_all::<nom::error::VerboseError<_>>(&string_data)
+        .finish();
+    //println!("{:?}", ctx);
+    if let Err(e) = e {
+        panic!("{}", convert_error(&*string_data, e));
+    }
+    println!(
+        "{}",
+        ron::ser::to_string_pretty(&ctx, ron::ser::PrettyConfig::default())?
+    );
+    Ok(())
+}
