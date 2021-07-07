@@ -11,6 +11,7 @@ use nom::{
 use serde::{Deserialize, Serialize};
 
 use std::convert::{TryFrom, TryInto};
+use std::fmt::Display;
 use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
@@ -43,7 +44,21 @@ impl LuaObject {
     }
 }
 
-impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for HashMap<String, T> {
+impl TryFrom<LuaObject> for LuaExpr {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<Self, Self::Error> {
+        match value {
+            LuaObject::Expr(x) => Ok(*x),
+            _ => Err("Not an Expr".into()),
+        }
+    }
+}
+
+impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for HashMap<String, T>
+where
+    <T as TryFrom<LuaObject>>::Error: Display,
+{
     type Error = String;
 
     fn try_from(value: LuaObject) -> Result<Self, Self::Error> {
@@ -52,7 +67,7 @@ impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for HashMap<String, T> {
                 .into_iter()
                 .map(|(i, l)| {
                     T::try_from(l)
-                        .map_err(|_| format!("Could not convert child '{}'", &i))
+                        .map_err(|e| format!("Could not convert child '{}': {}", &i, &e))
                         .map(|l| (i, l))
                 })
                 .collect(),
@@ -76,7 +91,10 @@ impl<T: Hash + Eq + TryFrom<LuaObject>> TryFrom<LuaObject> for HashSet<T> {
     }
 }
 
-impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for Vec<T> {
+impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for Vec<T>
+where
+    <T as TryFrom<LuaObject>>::Error: Display,
+{
     type Error = String;
 
     fn try_from(value: LuaObject) -> Result<Vec<T>, Self::Error> {
@@ -86,7 +104,7 @@ impl<T: TryFrom<LuaObject>> TryFrom<LuaObject> for Vec<T> {
                 .enumerate()
                 .map(|(idx, i)| {
                     i.try_into()
-                        .map_err(|_| format!("Could not convert child {}", idx))
+                        .map_err(|e| format!("Could not convert child {}: {}", idx, &e))
                 })
                 .collect(),
             _ => Err("Not an Array".into()),

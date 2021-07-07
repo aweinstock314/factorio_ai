@@ -15,8 +15,9 @@ use std::{
     path::PathBuf,
 };
 
-use crate::recipe::{ProductId, ProductsPerSecond, Recipe, RecipeMap};
-use lua_parser::{LuaContext, LuaExpr, LuaObject, LuaStmt};
+use crate::lua_parser::LuaExpr;
+use crate::recipe::{Ingredient, ProductId, ProductsPerSecond, Recipe, RecipeMap};
+use lua_parser::{parse_data_extend, LuaContext, LuaObject, LuaStmt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ModuleEffect {
@@ -280,11 +281,77 @@ fn parse_item() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct Technology {
+    name: String,
+    type_: String,
+    effects: Vec<LuaObject>,
+    prerequisites: Vec<String>,
+    ingredient_count: LuaObject,
+    ingredients: Vec<Ingredient>,
+    ingredient_time: f64,
+}
+
+impl TryFrom<LuaObject> for Technology {
+    type Error = String;
+
+    fn try_from(value: LuaObject) -> Result<Self, Self::Error> {
+        let mut map = HashMap::<String, LuaObject>::try_from(value)?;
+        let name = map
+            .remove_entry("name")
+            .ok_or("No key 'name'".into())
+            .and_then(|(_, l)| <_ as TryFrom<LuaObject>>::try_from(l))?;
+        let type_ = map
+            .remove_entry("type")
+            .ok_or("No key 'type'".into())
+            .and_then(|(_, l)| <_ as TryFrom<LuaObject>>::try_from(l))?;
+        let effects = map.remove_entry("effects").map_or_else(
+            || Ok(vec![]),
+            |(_, l)| <_ as TryFrom<LuaObject>>::try_from(l),
+        )?;
+        let prerequisites = map.remove_entry("prerequisites").map_or_else(
+            || Ok(vec![]),
+            |(_, l)| <_ as TryFrom<LuaObject>>::try_from(l),
+        )?;
+
+        let mut unit = map
+            .remove_entry("unit")
+            .ok_or("No key 'unit'".into())
+            .and_then(|(_, l)| HashMap::<String, LuaObject>::try_from(l))?;
+        let ingredient_count = unit.remove_entry("count").map_or_else(
+            || {
+                unit.remove_entry("count_formula")
+                    .ok_or(String::from("No key 'count' or 'count_formula'"))
+                    .map(|(_, l)| l)
+            },
+            |(_, l)| Ok(l),
+        )?;
+        let ingredients = unit
+            .remove_entry("ingredients")
+            .ok_or("No key 'ingredients'".into())
+            .and_then(|(_, l)| <_ as TryFrom<LuaObject>>::try_from(l))?;
+        let ingredient_time = unit
+            .remove_entry("time")
+            .ok_or("No key 'time'".into())
+            .and_then(|(_, l)| <_ as TryFrom<LuaObject>>::try_from(l))?;
+
+        Ok(Technology {
+            name,
+            type_,
+            effects,
+            prerequisites,
+            ingredient_count,
+            ingredients,
+            ingredient_time,
+        })
+    }
+}
+
 #[test]
 fn parse_technology() -> Result<(), Box<dyn Error>> {
-    let mut data = File::open("./factorio_headless/factorio/data/base/prototypes/technology.lua")?;
-    let mut string_data = String::new();
-    data.read_to_string(&mut string_data)?;
+    let mut string_data = std::fs::read_to_string(
+        "./factorio_headless/factorio/data/base/prototypes/technology.lua",
+    )?;
     let mut ctx = LuaContext::new();
     let e = ctx
         .parse_all::<nom::error::VerboseError<_>>(&string_data)
@@ -293,9 +360,17 @@ fn parse_technology() -> Result<(), Box<dyn Error>> {
     if let Err(e) = e {
         panic!("{}", convert_error(&*string_data, e));
     }
-    println!(
-        "{}",
-        ron::ser::to_string_pretty(&ctx, ron::ser::PrettyConfig::default())?
-    );
+
+    for group in ctx.data_extends {
+        let techs = Vec::<Technology>::try_from(group.simplify());
+        if let Ok(techs) = techs {
+            for tech in techs {
+                println!("{:?}", tech);
+            }
+        } else {
+            println!("{:?}", techs);
+        }
+    }
+
     Ok(())
 }
