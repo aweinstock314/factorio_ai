@@ -1,4 +1,5 @@
 pub mod lua_parser;
+pub mod recipe;
 
 use nom::{error::convert_error, Finish, Parser};
 use petgraph::Graph;
@@ -14,26 +15,7 @@ use std::{
 };
 
 use lua_parser::{parse_data_extend, LuaContext, LuaObject};
-
-type ProductsPerSecond = f64;
-type ProductId = String;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Ingredient {
-    name: ProductId,
-    amount: i64,
-    type_: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Recipe {
-    name: ProductId,
-    category: String,
-    enabled: bool,
-    ingredients: Vec<Ingredient>,
-    speed: ProductsPerSecond,
-    results: Vec<Ingredient>,
-}
+use crate::recipe::{ProductId, ProductsPerSecond, Recipe, RecipeMap};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ModuleEffect {
@@ -41,146 +23,6 @@ struct ModuleEffect {
     consumption: f64,
     productivity: f64,
     pollution: f64,
-}
-
-impl TryFrom<LuaObject> for Ingredient {
-    type Error = String;
-
-    fn try_from(value: LuaObject) -> Result<Self, Self::Error> {
-        let array_form = <(String, i64)>::try_from(value.clone());
-        let map_form = HashMap::<String, LuaObject>::try_from(value.clone());
-
-        let name;
-        let amount;
-        let type_;
-
-        match (array_form, map_form) {
-            (Ok((name_, amount_)), Err(_)) => {
-                name = name_;
-                amount = amount_;
-                type_ = String::from("item");
-            }
-            (Err(_), Ok(mut map)) => {
-                name = map
-                    .remove_entry("name")
-                    .ok_or("Cannot find field 'name'".into())
-                    .and_then(|(_, l)| String::try_from(l))?;
-                amount = map
-                    .remove_entry("amount")
-                    .map_or_else(|| Ok(1), |(_, l)| i64::try_from(l))?;
-                type_ = map
-                    .remove_entry("type")
-                    .map_or_else(|| Ok("item".into()), |(_, l)| String::try_from(l))?;
-            }
-            _ => return Err("Cannot decode ingredient".into()),
-        }
-
-        Ok(Ingredient {
-            name,
-            amount,
-            type_,
-        })
-    }
-}
-
-impl TryFrom<LuaObject> for Recipe {
-    type Error = String;
-
-    fn try_from(lua: LuaObject) -> Result<Self, Self::Error> {
-        let mut conts: HashMap<String, LuaObject> = lua.try_into()?;
-
-        let name: String = conts
-            .remove_entry("name")
-            .ok_or("No entry 'name'".into())
-            .and_then(|(_, l)| l.try_into())?;
-
-        let category: String = conts
-            .remove_entry("category")
-            .map_or_else(|| Ok(String::from("crafting")), |(_, l)| l.try_into())?;
-
-        let recipe: Result<HashMap<String, LuaObject>, String> = conts
-            .remove_entry("normal")
-            .ok_or("No normal recipe".into())
-            .and_then(|(_, l)| l.try_into());
-        let (results, enabled, energy_required, ingredients) = if let Ok(mut recipe) = recipe {
-            (
-                recipe.remove_entry("results").map_or_else(
-                    || {
-                        recipe
-                            .remove_entry("result")
-                            .ok_or("No entry 'result' or 'results'".into())
-                            .and_then(|(_, r)| {
-                                recipe.remove_entry("result_count").map_or_else(
-                                    || Ok((String::try_from(r.clone())?, 1i64)),
-                                    |(_, c)| Ok((String::try_from(r.clone())?, i64::try_from(c)?)),
-                                )
-                            })
-                            .and_then(|(r, c)| {
-                                Ok(vec![Ingredient {
-                                    name: r,
-                                    amount: c,
-                                    type_: "item".into(),
-                                }])
-                            })
-                    },
-                    |(_, l)| l.try_into(),
-                )?,
-                recipe
-                    .remove_entry("enabled")
-                    .map_or_else(|| Ok(true), |(_, l)| l.try_into())?,
-                recipe
-                    .remove_entry("energy_required")
-                    .map_or_else(|| Ok(1f64), |(_, l)| l.try_into())?,
-                recipe
-                    .remove_entry("ingredients")
-                    .ok_or("No entry 'ingredients'".into())
-                    .and_then(|(_, l)| l.try_into())?,
-            )
-        } else {
-            (
-                conts.remove_entry("results").map_or_else(
-                    || {
-                        conts
-                            .remove_entry("result")
-                            .ok_or("No entry 'result' or 'results'".into())
-                            .and_then(|(_, r)| {
-                                conts.remove_entry("result_count").map_or_else(
-                                    || Ok((String::try_from(r.clone())?, 1i64)),
-                                    |(_, c)| Ok((String::try_from(r.clone())?, i64::try_from(c)?)),
-                                )
-                            })
-                            .and_then(|(r, c)| {
-                                Ok(vec![Ingredient {
-                                    name: r,
-                                    amount: c,
-                                    type_: "item".into(),
-                                }])
-                            })
-                    },
-                    |(_, l)| l.try_into(),
-                )?,
-                conts
-                    .remove_entry("enabled")
-                    .map_or_else(|| Ok(true), |(_, l)| l.try_into())?,
-                conts
-                    .remove_entry("energy_required")
-                    .map_or_else(|| Ok(1f64), |(_, l)| l.try_into())?,
-                conts
-                    .remove_entry("ingredients")
-                    .ok_or("No entry 'ingredients'".into())
-                    .and_then(|(_, l)| l.try_into())?,
-            )
-        };
-
-        Ok(Recipe {
-            name,
-            category,
-            enabled,
-            ingredients,
-            speed: 1f64 / energy_required,
-            results,
-        })
-    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -194,16 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map_err(|e| convert_error(&*string_data, e).into())
         .and_then(|(_, objs)| Vec::<Recipe>::try_from(objs.simplify()))?;
 
-    let mut recipe_map = HashMap::<ProductId, Vec<Recipe>>::new();
-    for recipe in raw_recipes {
-        for output in &recipe.results {
-            if let Some(m) = recipe_map.get_mut(&output.name) {
-                m.push(recipe.clone());
-            } else {
-                recipe_map.insert(output.name.clone(), vec![recipe.clone()]);
-            }
-        }
-    }
+    let recipe_map = RecipeMap::new(raw_recipes);
 
     // TODO: Parse (avi?)
 
@@ -369,7 +202,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // find a recipe in the map to make this
     while !todo_requirements.is_empty() {
         let (product, speed) = todo_requirements.pop_front().unwrap();
-        if let Some(recipes) = recipe_map.get(&product) {
+        if let Some(recipes) = recipe_map.0.get(&product) {
             let product_node = *nodes
                 .entry(product.clone())
                 .or_insert_with(|| graph.add_node(product.clone()));
@@ -417,8 +250,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 .productivity
                         })
                         .sum();
-
-                    modded_rate /= 1f64 + module_effect;
+                    // modded_rate /= 1f64 + module_effect;
                 }
                 todo_requirements.push_back((ingredient.name.clone(), modded_rate));
             }
