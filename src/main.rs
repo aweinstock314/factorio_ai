@@ -1,14 +1,19 @@
 pub mod lua_parser;
 
 use nom::{error::convert_error, Finish, Parser};
+use petgraph::Graph;
 use serde::{Deserialize, Serialize};
-use std::{error::Error, fs::File, io::Read};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet, VecDeque},
+    convert::{TryFrom, TryInto},
+    error::Error,
+    fs::File,
+    io::{Read, Write},
+    iter::FromIterator,
+};
 
-use lua_parser::{parse_data_extend, LuaObject, LuaContext};
-use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque, HashSet};
-use std::convert::{TryFrom, TryInto};
-use std::iter::FromIterator;
+use lua_parser::{parse_data_extend, LuaContext, LuaObject};
 
 type ProductsPerSecond = f64;
 type ProductId = String;
@@ -253,20 +258,92 @@ fn main() -> Result<(), Box<dyn Error>> {
         String::from("military-science-pack"),
         String::from("production-science-pack"),
         String::from("utility-science-pack"),
-        String::from("kovarex-enrichment-process")
+        String::from("kovarex-enrichment-process"),
     ]);
 
     // item.lua
     let module_bonuses = HashMap::<String, ModuleEffect>::from_iter([
-        (String::from("speed-module"), ModuleEffect { speed: 0.2, consumption: 0.5, productivity: 0.0, pollution: 0.0}),
-        (String::from("speed-module-2"), ModuleEffect { speed: 0.3, consumption: 0.6, productivity: 0.0, pollution: 0.0}),
-        (String::from("speed-module-3"), ModuleEffect { speed: 0.5, consumption: 0.7, productivity: 0.0, pollution: 0.0}),
-        (String::from("efficiency-module"), ModuleEffect { speed: 0.0, consumption: -0.3, productivity: 0.0, pollution: 0.0}),
-        (String::from("efficiency-module-2"), ModuleEffect { speed: 0.0, consumption: -0.4, productivity: 0.0, pollution: 0.0}),
-        (String::from("efficiency-module-3"), ModuleEffect { speed: 0.0, consumption: -0.5, productivity: 0.0, pollution: 0.0}),
-        (String::from("productivity-module"), ModuleEffect { speed: -0.05, consumption: 0.4, productivity: 0.04, pollution: 0.05}),
-        (String::from("productivity-module-2"), ModuleEffect { speed: -0.1, consumption: 0.6, productivity: 0.06, pollution: 0.07}),
-        (String::from("productivity-module-3"), ModuleEffect { speed: -0.15, consumption: 0.8, productivity: 0.1, pollution: 0.1}),
+        (
+            String::from("speed-module"),
+            ModuleEffect {
+                speed: 0.2,
+                consumption: 0.5,
+                productivity: 0.0,
+                pollution: 0.0,
+            },
+        ),
+        (
+            String::from("speed-module-2"),
+            ModuleEffect {
+                speed: 0.3,
+                consumption: 0.6,
+                productivity: 0.0,
+                pollution: 0.0,
+            },
+        ),
+        (
+            String::from("speed-module-3"),
+            ModuleEffect {
+                speed: 0.5,
+                consumption: 0.7,
+                productivity: 0.0,
+                pollution: 0.0,
+            },
+        ),
+        (
+            String::from("efficiency-module"),
+            ModuleEffect {
+                speed: 0.0,
+                consumption: -0.3,
+                productivity: 0.0,
+                pollution: 0.0,
+            },
+        ),
+        (
+            String::from("efficiency-module-2"),
+            ModuleEffect {
+                speed: 0.0,
+                consumption: -0.4,
+                productivity: 0.0,
+                pollution: 0.0,
+            },
+        ),
+        (
+            String::from("efficiency-module-3"),
+            ModuleEffect {
+                speed: 0.0,
+                consumption: -0.5,
+                productivity: 0.0,
+                pollution: 0.0,
+            },
+        ),
+        (
+            String::from("productivity-module"),
+            ModuleEffect {
+                speed: -0.05,
+                consumption: 0.4,
+                productivity: 0.04,
+                pollution: 0.05,
+            },
+        ),
+        (
+            String::from("productivity-module-2"),
+            ModuleEffect {
+                speed: -0.1,
+                consumption: 0.6,
+                productivity: 0.06,
+                pollution: 0.07,
+            },
+        ),
+        (
+            String::from("productivity-module-3"),
+            ModuleEffect {
+                speed: -0.15,
+                consumption: 0.8,
+                productivity: 0.1,
+                pollution: 0.1,
+            },
+        ),
     ]);
 
     // entities.lua
@@ -283,6 +360,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let goal: (ProductId, f64) = ("spidertron".into(), 1f64);
 
+    let mut graph = Graph::new();
+    let mut nodes = HashMap::new();
     let mut requirements = HashMap::new();
     let mut todo_requirements = VecDeque::new();
     todo_requirements.push_back(goal.clone()); // now this is an api i can get behind
@@ -291,6 +370,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     while !todo_requirements.is_empty() {
         let (product, speed) = todo_requirements.pop_front().unwrap();
         if let Some(recipes) = recipe_map.get(&product) {
+            let product_node = *nodes
+                .entry(product.clone())
+                .or_insert_with(|| graph.add_node(product.clone()));
             // Find the fastest
             let fastest = recipes
                 .iter()
@@ -315,6 +397,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "Using {} to make {} x {} from {:?}",
                     ingredient.name, product, output_amount, fastest
                 );
+                let ingredient_node = *nodes
+                    .entry(ingredient.name.clone())
+                    .or_insert_with(|| graph.add_node(ingredient.name.clone()));
+                graph.update_edge(ingredient_node, product_node, ());
                 let mut modded_rate = speed * (ingredient.amount as f64) / (output_amount as f64);
                 if productivity_allowed.contains(&fastest.name) {
                     let modules = vec![
@@ -324,18 +410,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
                     let module_effect: f64 = modules
                         .into_iter()
-                        .map(|m| module_bonuses
-                            .get(&*m)
-                            .expect("Unknown module")
-                            .productivity
-                        ).sum();
+                        .map(|m| {
+                            module_bonuses
+                                .get(&*m)
+                                .expect("Unknown module")
+                                .productivity
+                        })
+                        .sum();
 
                     modded_rate /= 1f64 + module_effect;
                 }
-                todo_requirements.push_back((
-                    ingredient.name.clone(),
-                    modded_rate,
-                ));
+                todo_requirements.push_back((ingredient.name.clone(), modded_rate));
             }
         } else {
             if let Some(req) = requirements.get_mut(&product) {
@@ -351,6 +436,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("    {} @ {}/sec", product, speed);
     }
 
+    {
+        use petgraph::dot::{Config, Dot};
+        let mut f = File::create("spidertron.dot")?;
+        write!(f, "{:?}", Dot::with_config(&graph, &[Config::EdgeNoLabel]))?;
+    }
+
     // println!("{}", ron::ser::to_string_pretty(&recipe_map, PrettyConfig::default())?);
 
     Ok(())
@@ -362,11 +453,16 @@ fn parse_item() -> Result<(), Box<dyn Error>> {
     let mut string_data = String::new();
     data.read_to_string(&mut string_data)?;
     let mut ctx = LuaContext::new();
-    let e = ctx.parse_all::<nom::error::VerboseError<_>>(&string_data).finish();
+    let e = ctx
+        .parse_all::<nom::error::VerboseError<_>>(&string_data)
+        .finish();
     //println!("{:?}", ctx);
     if let Err(e) = e {
         panic!("{}", convert_error(&*string_data, e));
     }
-    println!("{}", ron::ser::to_string_pretty(&ctx, ron::ser::PrettyConfig::default())?);
+    println!(
+        "{}",
+        ron::ser::to_string_pretty(&ctx, ron::ser::PrettyConfig::default())?
+    );
     Ok(())
 }
