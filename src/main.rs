@@ -362,16 +362,49 @@ fn parse_technology() -> Result<(), Box<dyn Error>> {
         panic!("{}", convert_error(&*string_data, e));
     }
 
+    let mut all_techs = HashMap::new();
     for group in ctx.data_extends {
         let techs = Vec::<Technology>::try_from(group.simplify());
         if let Ok(techs) = techs {
             for tech in techs {
                 println!("{:?}", tech);
+                all_techs.insert(tech.name.clone(), tech);
             }
         } else {
             println!("{:?}", techs);
         }
     }
 
+    let mut graph = Graph::new();
+    let mut nodes = HashMap::new();
+    for (_, tech) in all_techs.iter() {
+        let tech_node = *nodes
+            .entry(tech.name.clone())
+            .or_insert_with(|| graph.add_node(tech.name.clone()));
+        for prereq in tech.prerequisites.iter() {
+            let prereq_node = *nodes
+                .entry(prereq.clone())
+                .or_insert_with(|| graph.add_node(prereq.clone()));
+            graph.update_edge(prereq_node, tech_node, ());
+        }
+    }
+    {
+        use petgraph::dot::{Config, Dot};
+        let mut f = File::create("technology.dot")?;
+        writeln!(f, "digraph {{").unwrap();
+        writeln!(f, "rankdir = \"LR\"").unwrap();
+        writeln!(
+            f,
+            "{:#?}",
+            Dot::with_attr_getters(
+                &graph,
+                &[Config::EdgeNoLabel, Config::GraphContentOnly],
+                &|_, _| "".to_owned(),
+                &|_, _| { "constraint=false".to_owned() }
+            )
+        )
+        .unwrap();
+        writeln!(f, "}}").unwrap();
+    }
     Ok(())
 }
