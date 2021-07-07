@@ -26,6 +26,23 @@ pub struct Recipe {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecipeMap(pub HashMap<ProductId, Vec<Recipe>>);
 
+pub trait ConversionExt {
+    type Index<'a>;
+    fn field<'a, T: TryFrom<LuaObject, Error = String>>(
+        &mut self,
+        index: Self::Index<'a>,
+    ) -> Result<T, T::Error>;
+}
+
+impl ConversionExt for HashMap<String, LuaObject> {
+    type Index<'a> = &'a str;
+    fn field<T: TryFrom<LuaObject, Error = String>>(&mut self, index: &str) -> Result<T, T::Error> {
+        self.remove_entry(index)
+            .ok_or_else(|| format!("Couldn't find key {:?} in {:?}", index, self.keys()))
+            .and_then(|(_, x)| T::try_from(x))
+    }
+}
+
 impl TryFrom<LuaObject> for Ingredient {
     type Error = String;
 
@@ -44,16 +61,9 @@ impl TryFrom<LuaObject> for Ingredient {
                 type_ = String::from("item");
             }
             (Err(_), Ok(mut map)) => {
-                name = map
-                    .remove_entry("name")
-                    .ok_or("Cannot find field 'name'".into())
-                    .and_then(|(_, l)| String::try_from(l))?;
-                amount = map
-                    .remove_entry("amount")
-                    .map_or_else(|| Ok(1), |(_, l)| i64::try_from(l))?;
-                type_ = map
-                    .remove_entry("type")
-                    .map_or_else(|| Ok("item".into()), |(_, l)| String::try_from(l))?;
+                name = map.field("name")?;
+                amount = map.field("amount").unwrap_or(1);
+                type_ = map.field("type").unwrap_or_else(|_| "item".into());
             }
             _ => return Err("Cannot decode ingredient".into()),
         }
@@ -72,19 +82,14 @@ impl TryFrom<LuaObject> for Recipe {
     fn try_from(lua: LuaObject) -> Result<Self, Self::Error> {
         let mut conts: HashMap<String, LuaObject> = lua.try_into()?;
 
-        let name: String = conts
-            .remove_entry("name")
-            .ok_or("No entry 'name'".into())
-            .and_then(|(_, l)| l.try_into())?;
+        let name: String = conts.field("name")?;
 
         let category: String = conts
-            .remove_entry("category")
-            .map_or_else(|| Ok(String::from("crafting")), |(_, l)| l.try_into())?;
+            .field("category")
+            .unwrap_or_else(|_| "crafting".into());
 
-        let recipe: Result<HashMap<String, LuaObject>, String> = conts
-            .remove_entry("normal")
-            .ok_or("No normal recipe".into())
-            .and_then(|(_, l)| l.try_into());
+        let recipe: Result<HashMap<String, LuaObject>, String> = conts.field("normal");
+
         let (results, enabled, energy_required, ingredients) = if let Ok(mut recipe) = recipe {
             (
                 recipe.remove_entry("results").map_or_else(
@@ -108,16 +113,9 @@ impl TryFrom<LuaObject> for Recipe {
                     },
                     |(_, l)| l.try_into(),
                 )?,
-                recipe
-                    .remove_entry("enabled")
-                    .map_or_else(|| Ok(true), |(_, l)| l.try_into())?,
-                recipe
-                    .remove_entry("energy_required")
-                    .map_or_else(|| Ok(1f64), |(_, l)| l.try_into())?,
-                recipe
-                    .remove_entry("ingredients")
-                    .ok_or("No entry 'ingredients'".into())
-                    .and_then(|(_, l)| l.try_into())?,
+                recipe.field("enabled").unwrap_or(true),
+                recipe.field("energy_required").unwrap_or(1.0),
+                recipe.field("ingredients")?,
             )
         } else {
             (
@@ -142,16 +140,9 @@ impl TryFrom<LuaObject> for Recipe {
                     },
                     |(_, l)| l.try_into(),
                 )?,
-                conts
-                    .remove_entry("enabled")
-                    .map_or_else(|| Ok(true), |(_, l)| l.try_into())?,
-                conts
-                    .remove_entry("energy_required")
-                    .map_or_else(|| Ok(1f64), |(_, l)| l.try_into())?,
-                conts
-                    .remove_entry("ingredients")
-                    .ok_or("No entry 'ingredients'".into())
-                    .and_then(|(_, l)| l.try_into())?,
+                conts.field("enabled").unwrap_or(true),
+                conts.field("energy_required").unwrap_or(1.0),
+                conts.field("ingredients")?,
             )
         };
 
