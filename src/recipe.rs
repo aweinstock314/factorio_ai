@@ -27,15 +27,15 @@ pub struct Recipe {
 pub struct RecipeMap(pub HashMap<ProductId, Vec<Recipe>>);
 
 pub trait ConversionExt {
-    type Index<'a>;
+    type Index: ?Sized;
     fn field<'a, T: TryFrom<LuaObject, Error = String>>(
         &mut self,
-        index: Self::Index<'a>,
+        index: &Self::Index,
     ) -> Result<T, T::Error>;
 }
 
 impl ConversionExt for HashMap<String, LuaObject> {
-    type Index<'a> = &'a str;
+    type Index = str;
     fn field<T: TryFrom<LuaObject, Error = String>>(&mut self, index: &str) -> Result<T, T::Error> {
         self.remove_entry(index)
             .ok_or_else(|| format!("Couldn't find key {:?} in {:?}", index, self.keys()))
